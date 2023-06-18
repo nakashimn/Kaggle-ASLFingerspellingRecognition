@@ -1,0 +1,23 @@
+version: '3.3'
+services:
+  kaggle-aslfingerspelling:
+    build: ./Dockerfile
+    container_name: kaggle-aslfingerspelling
+    hostname: kaggle-aslfingerspelling
+    shm_size: '28gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+           - driver: nvidia
+             capabilities: ["gpu"]
+    volumes:
+      - ${PWD}/:/workspace:cached
+      - ${PWD}/kaggle:/kaggle:cached
+      - ${PWD}/log/mlruns:/workspace/log/mlruns
+    environment:
+      TZ: Asia/Tokyo
+      KAGGLE_USERNAME: ${KAGGLE_USERNAME}
+      KAGGLE_KEY: ${KAGGLE_KEY}
+      MLFLOW_TRACKING_URI: /workspace/log/mlruns
+    tty: true

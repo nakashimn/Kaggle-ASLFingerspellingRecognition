@@ -1,0 +1,38 @@
+# debug
+ipykernel
+ipywidgets
+protobuf
+pyyaml
+
+# utility
+tqdm
+kaggle
+black
+urllib3==1.26.16
+
+# data analysis
+numpy
+pandas
+matplotlib
+seaborn
+mlflow
+
+# deeplearning
+torch
+pytorch-lightning
+transformers
+optuna
+albumentations
+lightly
+
+# table
+lightgbm
+
+# image
+opencv-python
+timm
+torchvision
+
+# audio
+librosa
+torchaudio

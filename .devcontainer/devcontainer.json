@@ -1,0 +1,19 @@
+{
+	"name": "kaggle-aslfingerspelling",
+	"dockerComposeFile": "../docker-compose.yml",
+	"service": "kaggle-aslfingerspelling",
+	"workspaceFolder": "/workspace",
+	"customizations": {
+		"vscode": {
+			"settings": {},
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-toolsai.jupyter",
+				"donjayamanne.githistory",
+				"eamodio.gitlens",
+				"ryuta46.multi-command"
+			]
+		}
+	}
+}

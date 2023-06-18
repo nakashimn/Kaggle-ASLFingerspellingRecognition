@@ -1,0 +1,15 @@
+*.pyc
+tmp
+
+.kaggle
+.env
+
+data/*
+kaggle/input/*
+log/*
+src/log/*
+
+lightning_logs
+submission.csv
+
+!.gitignore
