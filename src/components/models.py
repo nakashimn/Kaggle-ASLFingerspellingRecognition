@@ -180,7 +180,9 @@ class T5forASLModel(LightningModule):
         self.end_token_ids: torch.Tensor = torch.tensor([
             self.config["special_token_ids"]["eos_token_id"],
         ])
-        self.example_input_array = torch.rand([1, 10, 84])
+        self.example_input_array: torch.Tensor = torch.rand(
+            [10, self.config["dim_input"]]
+        )
 
         # variables
         self.training_step_outputs: list[dict[str, Any]] = []
@@ -205,6 +207,8 @@ class T5forASLModel(LightningModule):
             attention_mask: torch.Tensor | None = None,
             labels: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if input_embeds.dim() == 2:
+            input_embeds = input_embeds.unsqueeze(dim=0)
         x = input_embeds.nan_to_num(self.config["fillna_val"])
         x = self.linear(input_embeds)
         if labels is not None:
