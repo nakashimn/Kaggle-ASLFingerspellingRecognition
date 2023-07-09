@@ -8,10 +8,10 @@ from pytorch_lightning import LightningModule, Trainer, callbacks
 
 class ModelUploader(callbacks.Callback):
     def __init__(
-        self, model_dir: str, every_n_epochs: int = 5, message: str = ""
+        self, model_dir: str, every_n_epochs: int | None = 5, message: str = ""
     ) -> None:
         self.model_dir: str = model_dir
-        self.every_n_epochs: int = every_n_epochs
+        self.every_n_epochs: int | None = every_n_epochs
         self.message: str = message
         self.should_upload: bool = False
         super().__init__()
