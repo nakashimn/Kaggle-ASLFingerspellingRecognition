@@ -1,9 +1,8 @@
-version: '3.3'
 services:
-  kaggle-aslfingerspelling:
+  kaggle-asl-fingerspelling:
     build: ./Dockerfile
-    container_name: kaggle-aslfingerspelling
-    hostname: kaggle-aslfingerspelling
+    container_name: kaggle-asl-fingerspelling
+    hostname: kaggle-asl-fingerspelling
     shm_size: '28gb'
     deploy:
       resources:
@@ -14,7 +13,7 @@ services:
     volumes:
       - ${PWD}/:/workspace:cached
       - ${PWD}/kaggle:/kaggle:cached
-      - ${PWD}/log/mlruns:/workspace/log/mlruns
+      - ${MLFLOW_STORAGE_PATH}:/workspace/log/mlruns
     environment:
       TZ: Asia/Tokyo
       KAGGLE_USERNAME: ${KAGGLE_USERNAME}
