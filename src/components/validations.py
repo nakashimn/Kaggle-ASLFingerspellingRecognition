@@ -1,3 +1,4 @@
+import json
 import traceback
 from typing import Any
 
@@ -5,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import Levenshtein
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from numpy.typing import NDArray
@@ -118,3 +120,47 @@ class CMeanAveragePrecision:
             self.padded_labels, self.padded_probs, average="macro"
         )
         return cmap
+
+
+class LevenshteinDistance:
+    def __init__(self, config: dict[str, Any]) -> None:
+        # const
+        self.config: dict[str, Any] = config
+        self.charmap: dict[int, str] = self._read_charmap()
+
+    @staticmethod
+    def _read_json(filepath: str) -> dict[Any, Any]:
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data: dict[Any, Any] = json.load(f)
+            return data
+        except:
+            raise
+
+    def _read_charmap(self) -> dict[int, str]:
+        char_to_id_map: dict[str, int] = self._read_json(self.config["charmap_path"])
+        id_to_char_map: dict[int, str] = {
+            i:s for s, i in char_to_id_map.items()
+        }
+        return id_to_char_map
+
+    def _convert_ids_to_chars(self, ids: NDArray) -> NDArray:
+        return "".join([self.charmap[i] for i in ids if i in self.charmap.keys()])
+
+    def calc(self, probs: NDArray, labels: NDArray) -> list[float]:
+        probs_text: list[str] = [
+            self._convert_ids_to_chars(ids) for ids in probs]
+        labels_text: list[str] = [
+            self._convert_ids_to_chars(ids) for ids in labels]
+
+        distances: NDArray = np.array([
+            Levenshtein.distance(prob_text, label_text)
+            for prob_text, label_text in zip(probs_text, labels_text)
+        ])
+
+        if self.config["normalize"]:
+            distances = np.array([
+                (len(label_text) - distance) / len(label_text)
+                for distance, label_text in zip(distances, labels_text)
+            ])
+        return distances
