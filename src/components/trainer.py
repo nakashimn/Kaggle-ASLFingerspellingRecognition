@@ -46,17 +46,16 @@ class Trainer:
 
         # variable
         self.min_loss = MinLoss()
-        self.val_probs = ValidResult()
-        self.val_labels = ValidResult()
 
     def run(self) -> None:
         try:
-            # idx_train, idx_val = self._split_dataset(self.df_train)
             kfold = sklearn.model_selection.StratifiedKFold(
-                n_splits=5, shuffle=True, random_state=self.config["random_seed"]
+                n_splits=self.config["n_splits"],
+                shuffle=True,
+                random_state=self.config["random_seed"],
             )
             for fold, (idx_train, idx_val) in enumerate(
-                kfold.split(self.df_train, self.df_train["label_id"])
+                kfold.split(self.df_train, self.df_train["participant_id"])
             ):
                 self._run_unit(fold, idx_train, idx_val)
 
@@ -91,11 +90,7 @@ class Trainer:
 
             # valid
             if datamodule.val_dataloader() is not None:
-                val_probs, val_labels = self._valid(
-                    datamodule, fold=fold, logger=mlflow_logger
-                )
-                self.val_probs.append(val_probs)
-                self.val_labels.append(val_labels)
+                self._valid(datamodule, fold=fold, logger=mlflow_logger)
 
             # log
             mlflow_logger.finalize("FINISHED")
@@ -133,7 +128,8 @@ class Trainer:
 
     def _create_transforms(self) -> dict[str, Augmentation | None]:
         transforms = {
-            "train": self.Aug(self.config["augmentation"]),
+            "train": self.Aug(self.config["augmentation"]) \
+                     if self.Aug is not None else None,
             "valid": None,
             "pred": None,
         }
@@ -178,9 +174,15 @@ class Trainer:
         )
         return model
 
+    def _define_earlystopping_monitor(self, fold: int | None = None) -> tuple[str, str]:
+        mode: str = "all" if (fold is None) else "cross_valid"
+        metrics: str = self.config["monitor"][mode]["metrics"]
+        monitor_mode: str = self.config["monitor"][mode]["mode"]
+        return (metrics, monitor_mode)
+
     @staticmethod
-    def _define_monitor_value(fold: int | None = None) -> str:
-        return "train_loss" if (fold is None) else "val_loss"
+    def _define_limit_val_batches(fold: int | None = None) -> float:
+        return 0.0 if (fold is None) else 1.0
 
     def _define_checkpoint_name(self, fold: int | None = None) -> str:
         checkpoint_name = f"{self.config['modelname']}"
@@ -235,7 +237,8 @@ class Trainer:
         logger: MLFlowLogger | None = None,
     ) -> float | None:
         # switch mode
-        monitor = self._define_monitor_value(fold)
+        metrics, monitor_mode = self._define_earlystopping_monitor(fold)
+        limit_val_batches = self._define_limit_val_batches(fold)
 
         # define saved checkpoint name
         checkpoint_name = self._define_checkpoint_name(fold)
@@ -246,11 +249,16 @@ class Trainer:
         # define pytorch_lightning callbacks
         callback_config = {
             "earlystopping": {
-                "monitor": monitor,
+                "monitor": metrics,
+                "mode": monitor_mode,
                 "min_delta": min_delta,
                 "stopping_threshold": min_loss,
             },
-            "checkpoint": {"filename": checkpoint_name, "monitor": monitor},
+            "checkpoint": {
+                "filename": checkpoint_name,
+                "monitor": metrics,
+                "mode": monitor_mode,
+            },
         }
         callback_list = self._define_callbacks(callback_config)
 
@@ -263,6 +271,7 @@ class Trainer:
             callbacks=callback_list,
             fast_dev_run=False,
             num_sanity_val_steps=0,
+            limit_val_batches=limit_val_batches,
             **self.config["trainer"],
         )
 
@@ -287,7 +296,7 @@ class Trainer:
         datamodule: LightningDataModule,
         fold: int | None,
         logger: MLFlowLogger | None = None,
-    ) -> tuple[NDArray | None]:
+    ) -> None:
         # load model
         model = self.Model(self.config["model"])
         model.eval()
@@ -301,12 +310,6 @@ class Trainer:
         )
         trainer.validate(model, datamodule=datamodule, ckpt_path=filepath_checkpoint)
 
-        # get result
-        val_probs = copy.deepcopy(model.val_probs)
-        val_labels = copy.deepcopy(model.val_labels)
-
         # clean memory
         del model
         gc.collect()
-
-        return val_probs, val_labels

@@ -49,7 +49,7 @@ def import_classes(
     Aug = getattr(
         importlib.import_module(f"components.augmentations"),
         config["augmentation"]["ClassName"],
-    )
+    ) if config["augmentation"]["ClassName"] is not None else None
     # debug message
     print_info(
         {
@@ -57,7 +57,7 @@ def import_classes(
                 "Model": Model.__name__,
                 "Dataset": Data.__name__,
                 "DataModule": DataModule.__name__,
-                "Augmentation": Aug.__name__,
+                "Augmentation": Aug.__name__ if Aug is not None else None,
             }
         }
     )
@@ -76,7 +76,6 @@ if __name__ == "__main__":
     # args
     args = get_args()
     config = importlib.import_module(f"config.{args.config}").config
-    from config.sample import config
 
     # import Classes
     Model, Data, DataModule, Aug = import_classes(config)

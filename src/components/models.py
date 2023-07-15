@@ -16,6 +16,7 @@ from transformers import T5Config, T5ForConditionalGeneration
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[0]))
 from augmentations import Augmentation, LabelSmoothing, Mixup
+from validations import LevenshteinDistance
 
 
 ################################################################################
@@ -169,19 +170,20 @@ class T5forASLModel(LightningModule):
 
         # const
         self.config: dict[str, Any] = config
-        models: tuple[nn.Module] = self._create_model()
-        self.linear: nn.Module = models[0]
-        self.model: nn.Module = models[1]
+        self.linear, self.model = self._create_model()
         self.input_embeddings: nn.Module = self.model.get_input_embeddings()
         self.output_embeddings: nn.Module = self.model.get_output_embeddings()
         self.bos_embed: torch.Tensor = self.input_embeddings(
             torch.tensor([[self.config["special_token_ids"]["bos_token_id"]]])
         ).detach()
         self.end_token_ids: torch.Tensor = torch.tensor([
-            self.config["special_token_ids"]["eos_token_id"],
-        ])
-        self.example_input_array: torch.Tensor = torch.rand(
-            [10, self.config["dim_input"]]
+            self.config["special_token_ids"]["eos_token_id"]
+        ]).detach()
+        # self.example_input_array: torch.Tensor = torch.rand(
+        #     [10, self.config["dim_input"]]
+        # )
+        self.levenshtein_distance = LevenshteinDistance(
+            self.config["metrics"]["levenshtein_distance"]
         )
 
         # variables
@@ -189,12 +191,28 @@ class T5forASLModel(LightningModule):
         self.validation_step_outputs: list[dict[str, Any]] = []
         self.min_loss: float = np.nan
 
+    def cuda(self):
+        self.bos_embed = self.bos_embed.cuda()
+        self.end_token_ids = self.end_token_ids.cuda()
+        return super().cuda()
+
+    def cpu(self):
+        self.bos_embed = self.bos_embed.cpu()
+        self.end_token_ids = self.end_token_ids.cpu()
+        return super().cpu()
+
+    def to(self, device):
+        self.bos_embed = self.bos_embed.to(device)
+        self.end_token_ids = self.end_token_ids.to(device)
+        return super().to(device)
+
     def _create_model(self) -> tuple[nn.Module]:
         # linear
         linear = nn.Linear(
             in_features=self.config["dim_input"],
             out_features=self.config["T5_config"]["d_model"],
             bias=True,
+            device=self.device,
         )
         # basemodel
         t5_config = T5Config(**self.config["T5_config"])
@@ -206,17 +224,21 @@ class T5forASLModel(LightningModule):
             input_embeds: torch.Tensor,
             attention_mask: torch.Tensor | None = None,
             labels: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor] | torch.Tensor:
         if input_embeds.dim() == 2:
             input_embeds = input_embeds.unsqueeze(dim=0)
         x = input_embeds.nan_to_num(self.config["fillna_val"])
         x = self.linear(input_embeds)
+
+        # training
         if labels is not None:
-            loss: torch.Tensor = self._training(x, attention_mask, labels)
-            return loss
+            outputs = self._training(x, attention_mask, labels)
+            return outputs
+
+        # inference
         else:
-            result_ids: torch.Tensor = self._inference(x, attention_mask)
-            return result_ids
+            output_embeds: torch.Tensor = self._inference(x, attention_mask)
+            return output_embeds
 
     def _training(
             self,
@@ -238,9 +260,9 @@ class T5forASLModel(LightningModule):
     ) -> torch.Tensor:
         encoder_hidden_states: torch.Tensor = self._encoding_for_inference(
             input_embeds, attention_mask)
-        result_ids: torch.Tensor = self._decoding_for_inference(
+        output_enbeds: torch.Tensor = self._decoding_for_inference(
             encoder_hidden_states, attention_mask)
-        return result_ids
+        return output_enbeds
 
     def _encoding_for_inference(
             self,
@@ -270,16 +292,20 @@ class T5forASLModel(LightningModule):
                 encoder_attention_mask=attention_mask,
                 return_dict="pt",
             ).last_hidden_state
-            result_ids: torch.Tensor = self.output_embeddings(rslt_embeds).argmax(dim=2)
 
             # check inference should be finished
+            result_ids: torch.Tensor = self.output_embeddings(
+                rslt_embeds.detach()
+            ).argmax(dim=2)
             if self._all_have_end_token_id(result_ids):
                 break
 
             # update decoder input
             decoder_inputs_embeds = torch.concat([bos_embeds, rslt_embeds], dim=1)
 
-        return result_ids
+        output_embeds: torch.Tensor = rslt_embeds[:, :-1, :self.config["dim_output"]]
+        output_embeds = output_embeds.detach().squeeze()
+        return output_embeds
 
     def _all_have_end_token_id(self, result_ids: torch.Tensor) -> bool:
         each_has_end_token_id: torch.Tensor = torch.isin(
@@ -292,7 +318,10 @@ class T5forASLModel(LightningModule):
         input_embeds, attention_mask, labels = batch
         loss, _ = self.forward(input_embeds, attention_mask, labels)
         self.training_step_outputs.append({"loss": loss.detach()})
-        self.log(f"train_loss", loss, prog_bar=True, logger=True, on_epoch=True, on_step=True)
+        self.log(
+            f"train_loss",loss, prog_bar=True, logger=True,
+            on_epoch=True, on_step=True,
+        )
         return loss
 
     def validation_step(
@@ -300,16 +329,31 @@ class T5forASLModel(LightningModule):
     ) -> dict[str, torch.Tensor]:
         input_embeds, attention_mask, labels = batch
         loss, logits = self.forward(input_embeds, attention_mask, labels)
-        self.validation_step_outputs.append({"loss": loss.detach(), "logit": logits.detach()})
-        self.log(f"val_loss", loss, prog_bar=True, logger=True, on_epoch=True, on_step=True)
+        self.validation_step_outputs.append(
+            {"loss": loss.detach(), "logit": logits.detach()}
+        )
+        result_ids: NDArray = logits.detach().argmax(dim=2).cpu().numpy()
+
+        ld_score: float = self.levenshtein_distance.calc(
+            result_ids,
+            labels.detach().cpu().numpy()
+        ).mean()
+        self.log(
+            f"val_loss", loss, prog_bar=True, logger=True,
+            on_epoch=True, on_step=True,
+        )
+        self.log(
+            f"levenshtein_distance", ld_score, prog_bar=True, logger=True,
+            on_epoch=True, on_step=True,
+        )
         return loss
 
     def predict_step(
         self, batch: torch.Tensor, batch_idx: int
     ) -> dict[str, torch.Tensor]:
         input_embeds: torch.Tensor = batch
-        result_ids: torch.Tensor = self.forward(input_embeds)
-        return {"outputs": result_ids}
+        rslt_embeds: torch.Tensor = self.forward(input_embeds)
+        return {"outputs": rslt_embeds}
 
     def on_train_epoch_end(self) -> None:
         loss: float = np.mean(
