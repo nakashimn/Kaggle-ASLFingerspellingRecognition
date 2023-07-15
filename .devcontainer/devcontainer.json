@@ -1,7 +1,7 @@
 {
-	"name": "kaggle-aslfingerspelling",
-	"dockerComposeFile": "../docker-compose.yml",
-	"service": "kaggle-aslfingerspelling",
+	"name": "kaggle-asl-fingerspelling",
+	"dockerComposeFile": "../compose.yaml",
+	"service": "kaggle-asl-fingerspelling",
 	"workspaceFolder": "/workspace",
 	"customizations": {
 		"vscode": {

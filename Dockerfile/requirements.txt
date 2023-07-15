@@ -1,3 +1,5 @@
+--extra-index-url=https://pypi.nvidia.com
+
 # debug
 ipykernel
 ipywidgets
@@ -13,6 +15,7 @@ urllib3==1.26.16
 # data analysis
 numpy
 pandas
+# cudf-cu12
 matplotlib
 seaborn
 mlflow
@@ -21,6 +24,14 @@ mlflow
 torch
 pytorch-lightning
 transformers
+tensorflow
+tensorflow-probability
+tensorflow-addons
+tflite-runtime
+onnx
+onnxruntime
+onnx_simplifier
+onnx-tf
 optuna
 albumentations
 lightly
@@ -36,3 +47,6 @@ torchvision
 # audio
 librosa
 torchaudio
+
+# text
+levenshtein
