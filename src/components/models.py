@@ -179,9 +179,9 @@ class T5forASLModel(LightningModule):
         self.end_token_ids: torch.Tensor = torch.tensor([
             self.config["special_token_ids"]["eos_token_id"]
         ]).detach()
-        # self.example_input_array: torch.Tensor = torch.rand(
-        #     [10, self.config["dim_input"]]
-        # )
+        self.dummy_input_embeds: torch.Tensor = torch.zeros(
+            [1, 1, self.config["dim_input"]]
+        )
         self.levenshtein_distance = LevenshteinDistance(
             self.config["metrics"]["levenshtein_distance"]
         )
@@ -194,16 +194,19 @@ class T5forASLModel(LightningModule):
     def cuda(self):
         self.bos_embed = self.bos_embed.cuda()
         self.end_token_ids = self.end_token_ids.cuda()
+        self.dummy_input_embeds = self.dummy_input_embeds.cuda()
         return super().cuda()
 
     def cpu(self):
         self.bos_embed = self.bos_embed.cpu()
         self.end_token_ids = self.end_token_ids.cpu()
+        self.dummy_input_embeds = self.dummy_input_embeds.cpu()
         return super().cpu()
 
     def to(self, device):
         self.bos_embed = self.bos_embed.to(device)
         self.end_token_ids = self.end_token_ids.to(device)
+        self.dummy_input_embeds = self.dummy_input_embeds.to(device)
         return super().to(device)
 
     def _create_model(self) -> tuple[nn.Module]:
@@ -227,6 +230,8 @@ class T5forASLModel(LightningModule):
     ) -> tuple[torch.Tensor] | torch.Tensor:
         if input_embeds.dim() == 2:
             input_embeds = input_embeds.unsqueeze(dim=0)
+        if input_embeds.shape[1] == 0:
+            input_embeds = self.dummy_input_embeds
         x = input_embeds.nan_to_num(self.config["fillna_val"])
         x = self.linear(input_embeds)
 
