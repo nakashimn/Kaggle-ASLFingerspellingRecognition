@@ -27,11 +27,11 @@ transformers
 tensorflow
 tensorflow-probability
 tensorflow-addons
-tflite-runtime
 onnx
 onnxruntime
 onnx_simplifier
 onnx-tf
+onnx2json
 optuna
 albumentations
 lightly

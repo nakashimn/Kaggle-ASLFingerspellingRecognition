@@ -16,4 +16,8 @@ COPY requirements.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
+COPY tflite_runtime_nightly-2.14.0.dev20230508-cp310-cp310-manylinux2014_x86_64.whl /tmp/
+RUN pip install --no-cache-dir /tmp/tflite_runtime_nightly-2.14.0.dev20230508-cp310-cp310-manylinux2014_x86_64.whl \
+    && rm /tmp/tflite_runtime_nightly-2.14.0.dev20230508-cp310-cp310-manylinux2014_x86_64.whl
+
 RUN git config --global --add safe.directory /workspace
