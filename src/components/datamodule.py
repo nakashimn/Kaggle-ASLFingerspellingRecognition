@@ -185,7 +185,7 @@ class T5ForASLDataset(Dataset):
             print(f"\33[31mfeatures.shape:{features.shape}\33[0m")
             raise
         attention_mask: torch.Tensor = torch.tensor(
-            [True] * len(features) + [False] * pad_length
+            [False] * len(features) + [True] * pad_length
         )
         return input_embeds, attention_mask
 

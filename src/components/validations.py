@@ -145,7 +145,7 @@ class LevenshteinDistance:
         return id_to_char_map
 
     def _convert_ids_to_chars(self, ids: NDArray) -> NDArray:
-        return "".join([self.charmap[i] for i in ids if i in self.charmap.keys()])
+        return "".join([self.charmap.get(i, "") for i in ids if i in self.charmap.keys()])
 
     def calc(self, probs: NDArray, labels: NDArray) -> list[float]:
         probs_text: list[str] = [
