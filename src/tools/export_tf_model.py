@@ -46,7 +46,7 @@ def convert_torch_to_onnx(
             torch_model_path,
             config=config["model"],
         ).to(device)
-        inputs_sample: torch.Tensor = torch.randn(10, config["model"]["dim_input"]).to(
+        inputs_sample: torch.Tensor = torch.randn(1, 10, config["model"]["dim_input"]).to(
             device
         )
         torch.onnx.export(
@@ -58,12 +58,13 @@ def convert_torch_to_onnx(
             input_names=["inputs"],
             output_names=["outputs"],
             dynamic_axes={
-                "inputs": {0: "length"},
-                "outputs": {0: "length"},
+                "inputs": {1: "length"},
+                "outputs": {1: "length"},
             },
         )
     except:
-        print(traceback.format_exc())
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
+        raise
     print(f"  end: {display_now()}")
 
 
@@ -75,9 +76,45 @@ def convert_onnx_to_tf(onnx_model_path: str, tf_model_path: str) -> None:
         tf_model = onnx_tf.backend.prepare(onnx_model)
         tf_model.export_graph(tf_model_path)
     except:
-        print(traceback.format_exc())
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
+        raise
     print(f"  end: {display_now()}")
 
+def convert_tf_to_tflitebase(
+    tf_model_path: str,
+    tflite_basemodel_path: str,
+    dim_input: int,
+):
+    print("\n\33[32m[convert tf to tflitebase]\33[0m")
+    print(f"  start: {display_now()}")
+
+    class TFLiteModel(tf.Module):
+        def __init__(self, model):
+            super(TFLiteModel, self).__init__()
+            self.infer = model.signatures["serving_default"]
+
+        @tf.function(input_signature=[
+            tf.TensorSpec(shape=[None, dim_input], dtype=tf.float32, name='inputs')])
+        def __call__(self, inputs, training=False):
+            # Preprocess Data
+            x = tf.cast(inputs, tf.float32)
+            x = x[None]
+            x = tf.identity(x)
+            x = tf.cond(
+                tf.shape(x)[1] == 0,
+                lambda: tf.zeros((1, 1, dim_input)),
+                lambda: tf.identity(x),
+            )
+            x = self.infer(x)
+            return {'outputs': x["outputs"][0]}
+
+    try:
+        tflite_basemodel = TFLiteModel(tf.saved_model.load(tf_model_path))
+        tf.saved_model.save(tflite_basemodel, tflite_basemodel_path)
+    except:
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
+        raise
+    print(f"  end: {display_now()}")
 
 def convert_tf_to_tflite(
     tf_model_path: str,
@@ -94,13 +131,14 @@ def convert_tf_to_tflite(
         converter.experimental_new_converter = True
         converter.target_spec.supported_ops = [
             tf.lite.OpsSet.TFLITE_BUILTINS,
-            tf.lite.OpsSet.SELECT_TF_OPS,
+            # tf.lite.OpsSet.SELECT_TF_OPS,
         ]
         tflite_model = converter.convert()
         with open(tflite_model_path, "wb") as f:
             f.write(tflite_model)
     except:
-        print(traceback.format_exc())
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
+        raise
     print(f"  end: {display_now()}")
 
 
@@ -109,7 +147,7 @@ def write_json(filepath, data):
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except:
-        print(traceback.format_exc())
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
 
 
 def define_inference_args(config: dict[str, Any]) -> dict[str, list[str]]:
@@ -135,7 +173,8 @@ def run_onnx(
         result = ort_session.run(None, {input_name: inputs})
         return result[0]
     except:
-        print(traceback.format_exc())
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
+        raise
 
 
 def run_tf(
@@ -151,7 +190,8 @@ def run_tf(
         result = infer(tf.constant(inputs))
         return result[output_name].numpy()
     except:
-        print(traceback.format_exc())
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
+        raise
 
 
 def run_tflite(
@@ -167,7 +207,8 @@ def run_tflite(
         result = prediction_fn(inputs=inputs)
         return result[output_name]
     except:
-        print(traceback.format_exc())
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
+        raise
 
 
 def rmse(result_0: NDArray, result_1: NDArray) -> float:
@@ -198,26 +239,29 @@ def get_args() -> Namespace:
     )
     return parser.parse_args()
 
+def debug_preprocess():
+    from config.sample import config
+    debug = True
+    modelname = config["modelname"]
 
 if __name__ == "__main__":
+
     # args
     args = get_args()
     config = importlib.import_module(f"config.{args.config}").config
-    # from config.sample import config
 
     # const
     device: str = config["pred_device"]
-    dtype: str = "float16"
+    dim_input: int = config["model"]["dim_input"]
     debug: bool = args.debug
-    # debug = True
     modelname: str = args.input or config["modelname"]
-    # modelname: str = config["modelname"]
 
     # path
     dirpath_model: str = config["path"]["model_dir"]
     torch_model_path: str = f"{dirpath_model}/{modelname}.ckpt"
     onnx_model_path: str = f"{dirpath_model}/{modelname}.onnx"
     tf_model_path: str = f"{dirpath_model}/{modelname}.tf"
+    tflite_basemodel_path: str = f"{dirpath_model}/basemodel_for_tflite.tf"
     tflite_model_path: str = f"{tf_model_path}/model.tflite"
     inference_args_path: str = f"{dirpath_model}/inference_args.json"
     submission_path: str = f"{dirpath_model}/submission.zip"
@@ -227,6 +271,8 @@ if __name__ == "__main__":
         os.remove(onnx_model_path)
     if os.path.exists(tf_model_path):
         shutil.rmtree(tf_model_path)
+    if os.path.exists(tflite_basemodel_path):
+        shutil.rmtree(tflite_basemodel_path)
     if os.path.exists(inference_args_path):
         os.remove(inference_args_path)
     if os.path.exists(submission_path):
@@ -242,7 +288,9 @@ if __name__ == "__main__":
         device=device,
     )
     convert_onnx_to_tf(onnx_model_path, tf_model_path)
-    convert_tf_to_tflite(tf_model_path, tflite_model_path, dtype=dtype)
+    convert_tf_to_tflitebase(tf_model_path, tflite_basemodel_path, dim_input=dim_input)
+    convert_tf_to_tflite(tflite_basemodel_path, tflite_model_path)
+    # convert_tf_to_tflite(tf_model_path, tflite_model_path, dtype=dtype)
     inference_args: dict[str, list[str]] = define_inference_args(config)
     write_json(inference_args_path, inference_args)
 
@@ -256,10 +304,10 @@ if __name__ == "__main__":
         dummy_inputs: NDArray = create_dummy_inputs(
             length=np.random.randint(0, 10),
             dim=len(inference_args["selected_columns"]),
-            dtype=dtype,
+            dtype="float32",
         )
-        result_onnx = run_onnx(onnx_model_path, dummy_inputs)
-        result_tf = run_tf(tf_model_path, dummy_inputs)
+        result_onnx = run_onnx(onnx_model_path, dummy_inputs[None])
+        result_tf = run_tf(tf_model_path, dummy_inputs[None])
         result_tflite = run_tflite(tflite_model_path, dummy_inputs)
         print("\n\33[32m[debug]\33[0m")
         print(f"  RMSE(onnx, tf): {rmse(result_onnx, result_tf):.3e}")
