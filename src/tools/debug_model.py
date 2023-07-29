@@ -2,27 +2,71 @@ import pathlib
 import sys
 import traceback
 
+import Levenshtein
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import onnx
+import pandas as pd
+from torch import nn
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-from components.models import EfficientNetModel
-from config.sample import config
+from components.models import TransformerforASLModel, MultiHeadAttention, ScaledDotProductAttention
+from config.asl_trial_v2 import config
 
 ###
 # sample
 ###
 # prepare input
-img = np.random.randn(224, 224, 3)
-img_tensor = torch.tensor(img)              # to_tensor
-img_tensor = img_tensor.permute([2, 0, 1])  # [H,W,C] to [C,H,W]
-batch = img_tensor.unsqueeze(dim=0)         # [C,H,W] to [N,C,H,W]
-batch = batch.to(torch.float32)             # to_float32
+input_embeds = torch.rand([1, 10, 184]).cuda() # [Batch x length x dim]
+attention_mask = torch.randint(0, 2, [1, 10], dtype=bool).cuda()
+labels = torch.randint(0, 58, [1, 10]).cuda()
+
+# training
+try:
+    model = TransformerforASLModel(config["model"]).cuda()
+    logits = model(input_embeds=input_embeds, attention_mask=attention_mask, labels=labels)
+    result_ids = logits.detach().argmax(dim=2)
+
+except:
+    print(traceback.format_exc())
 
 # inference
 try:
-    model = EfficientNetModel(config["model"])
-    out = model(batch.squeeze(dim=1))
-    print(out)
+    model = TransformerforASLModel(config["model"]).cuda()
+    logits = model(input_embeds=input_embeds)
 except:
     print(traceback.format_exc())
+
+input_embeds.std(dim=2)
+
+mulhead_attn = MultiHeadAttention(dim_inout=184, n_head=1).cuda()
+for param in mulhead_attn.state_dict():
+    print(param)
+
+sdp_attn = ScaledDotProductAttention(3)
+sdp_attn(input_embeds, input_embeds, input_embeds)
+
+q = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]])
+k = torch.tensor([[[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]])
+v = torch.tensor([[[1.0, 1.0, 1.0], [2.0, 2.0, 2.0], [3.0, 3.0, 3.0], [4.0, 4.0, 4.0]]])
+sdp_attn(q, k, v)
+
+scalar: float = np.sqrt(3)
+attn: torch.Tensor = torch.matmul(q, torch.transpose(k, 1, 2)) / scalar
+attn.shape
+
+mask = torch.tensor([[
+    [False,  True,  True,  True],
+    [False, False,  True,  True],
+    [False, False, False,  True],
+]])
+attn = attn.data.masked_fill_(mask, -torch.finfo(torch.float).max)
+
+attn = nn.functional.softmax(attn, dim=2)
+torch.matmul(attn, v)
+
+
+output_embeds = mulhead_attn(input_embeds, input_embeds, input_embeds)
+
+plt.imshow(mulhead_attn.W_k.grad[0].detach().cpu().numpy())
