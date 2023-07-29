@@ -1,20 +1,20 @@
 config = {
     "random_seed": 57,
     "pred_device": "cuda",
-    "n_splits": 3,
+    "n_splits": 5,
     "label": "phrase",
-    "experiment_name": "sample",
+    "experiment_name": "asl-trial-v1",
     "path": {
         "dataset": "/kaggle/input/asl-fingerspelling/",
         "traindata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
-        "trainmeta": "/workspace/data/sample_train.csv",
+        "trainmeta": "/kaggle/input/asl-fingerspelling/train.csv",
         "testdata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
         "testmeta": "/kaggle/input/asl-fingerspelling/train.csv",
         "preddata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
         "predmeta": "/kaggle/input/asl-fingerspelling/train.csv",
         "vocab_file": "/kaggle/input/asl-fingerspelling/character_to_prediction_index.json",
         "temporal_dir": "../tmp/artifacts/",
-        "model_dir": "/kaggle/input/sample_model/",
+        "model_dir": "/kaggle/input/asl-trial-v1/",
         "ckpt_dir": "/workspace/tmp/checkpoint/"
     },
     "vocab_size": 62,
@@ -64,15 +64,15 @@ config["model"] = {
         "pad_token_id": config["special_token_ids"]["pad_token_id"],
         "decoder_start_token_id": config["special_token_ids"]["bos_token_id"],
         "vocab_size": config["vocab_size"],
-        "d_model": 64,
-        "d_ff": 128,
+        "d_model": 256,
+        "d_ff": 1024,
         "d_kv": 64,
         "dropout_rate": 0.1,
-        "relative_attention_max_distance": 32,
+        "relative_attention_max_distance": 128,
         "relative_attention_num_buckets": 32,
-        "num_heads": 1,
-        "num_layers": 1,
-        "num_decoder_layers": 1,
+        "num_heads": 8,
+        "num_layers": 6,
+        "num_decoder_layers": 6,
         "use_cache": False,
     },
     "metrics": config["metrics"],
@@ -102,9 +102,9 @@ config["checkpoint"] = {
 config["trainer"] = {
     "accelerator": "gpu",
     "devices": 1,
-    "max_epochs": 1,
+    "max_epochs": 20,
     "accumulate_grad_batches": 1,
-    "deterministic": False,
+    "deterministic": True,
     "precision": 32
 }
 config["datamodule"] = {
@@ -115,10 +115,8 @@ config["datamodule"] = {
         "feat_max_length": 400,
         "select_col": [f"x_right_hand_{i}" for i in range(21)] \
                       + [f"y_right_hand_{i}" for i in range(21)] \
-                    #   + [f"z_right_hand_{i}" for i in range(21)] \
                       + [f"x_left_hand_{i}" for i in range(21)] \
                       + [f"y_left_hand_{i}" for i in range(21)] \
-                    #   + [f"z_left_hand_{i}" for i in range(21)] \
                       + [f"x_face_{i}" for i in [
                             61, 185, 40, 39, 37, 0, 267, 269, 270, 409,
                             291, 146, 91, 181, 84, 17, 314, 405, 321, 375,
@@ -131,12 +129,6 @@ config["datamodule"] = {
                             78, 191, 80, 81, 82, 13, 312, 311, 310, 415,
                             95, 88, 178, 87, 14, 317, 402, 318, 324, 308
                         ]] \
-                    #   + [f"z_face_{i}" for i in [
-                    #         61, 185, 40, 39, 37, 0, 267, 269, 270, 409,
-                    #         291, 146, 91, 181, 84, 17, 314, 405, 321, 375,
-                    #         78, 191, 80, 81, 82, 13, 312, 311, 310, 415,
-                    #         95, 88, 178, 87, 14, 317, 402, 318, 324, 308
-                    #     ]] \
                       + [f"x_pose_{i}" for i in [
                           13, 15, 17, 19, 21, 14, 16, 18, 20, 22
                         ]] \
@@ -149,6 +141,6 @@ config["datamodule"] = {
     },
     "dataloader": {
         "batch_size": 128,
-        "num_workers": 8
+        "num_workers": 4
     }
 }

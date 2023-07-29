@@ -1,28 +1,29 @@
 config = {
     "random_seed": 57,
     "pred_device": "cuda",
-    "n_splits": 3,
+    "n_splits": 5,
     "label": "phrase",
-    "experiment_name": "sample",
+    "experiment_name": "asl-trial-v2",
     "path": {
         "dataset": "/kaggle/input/asl-fingerspelling/",
         "traindata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
-        "trainmeta": "/workspace/data/sample_train.csv",
+        "trainmeta": "/kaggle/input/asl-fingerspelling/train.csv",
         "testdata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
         "testmeta": "/kaggle/input/asl-fingerspelling/train.csv",
         "preddata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
         "predmeta": "/kaggle/input/asl-fingerspelling/train.csv",
         "vocab_file": "/kaggle/input/asl-fingerspelling/character_to_prediction_index.json",
+        "norm_factor": "/workspace/data/norm_factor_trial_v2.csv",
         "temporal_dir": "../tmp/artifacts/",
-        "model_dir": "/kaggle/input/sample_model/",
+        "model_dir": "/kaggle/input/asl-trial-v2/",
         "ckpt_dir": "/workspace/tmp/checkpoint/"
     },
-    "vocab_size": 62,
+    "vocab_size": 63,
     "special_token_ids": {
         "bos_token_id": 59,
         "eos_token_id": 60,
         "unk_token_id": 61,
-        "pad_token_id": 59,
+        "pad_token_id": 62,
     },
     "modelname": "best_loss",
     "monitor": {
@@ -51,29 +52,25 @@ config["metrics"] = {
     }
 }
 config["model"] = {
-    "ClassName": "T5forASLModel",
+    "ClassName": "TransformerforASLModel",
     "gradient_checkpointing": True,
     "fillna_val": 0.0,
-    "dim_input": 184,
-    "dim_output": 59,
-    "max_length": 50,
-    "special_token_ids": config["special_token_ids"],
-    "T5_config": {
-        "bos_token_id": config["special_token_ids"]["bos_token_id"],
-        "eos_token_id": config["special_token_ids"]["eos_token_id"],
-        "pad_token_id": config["special_token_ids"]["pad_token_id"],
-        "decoder_start_token_id": config["special_token_ids"]["bos_token_id"],
+    "norm_factor_path": config["path"]["norm_factor"],
+    "Transformer": {
+        "dim_model": 184,
+        "dim_output": 63,
+        "dim_ff": 1024,
         "vocab_size": config["vocab_size"],
-        "d_model": 64,
-        "d_ff": 128,
-        "d_kv": 64,
-        "dropout_rate": 0.1,
-        "relative_attention_max_distance": 32,
-        "relative_attention_num_buckets": 32,
-        "num_heads": 1,
-        "num_layers": 1,
-        "num_decoder_layers": 1,
-        "use_cache": False,
+        "bos_idx": config["special_token_ids"]["bos_token_id"],
+        "pad_idx": config["special_token_ids"]["pad_token_id"],
+        "max_len_encoder": 1000,
+        "max_len_decoder": 50,
+        "n_layer": 4,
+        "n_head": 8,
+        "dropout_rate": 0.0,
+        "layer_norm_eps": 1e-7,
+        "prenorm": False,
+        "device": config["pred_device"],
     },
     "metrics": config["metrics"],
     "optimizer":{
@@ -81,6 +78,14 @@ config["model"] = {
         "params":{
             "lr": 1e-3
         },
+    },
+    "loss": {
+        "name": "nn.CrossEntropyLoss",
+        "params": {
+            "weight": None,
+            "ignore_index": config["special_token_ids"]["pad_token_id"],
+            "label_smoothing": 0.0,
+        }
     },
     "scheduler":{
         "name": "optim.lr_scheduler.CosineAnnealingWarmRestarts",
@@ -102,9 +107,9 @@ config["checkpoint"] = {
 config["trainer"] = {
     "accelerator": "gpu",
     "devices": 1,
-    "max_epochs": 1,
+    "max_epochs": 20,
     "accumulate_grad_batches": 1,
-    "deterministic": False,
+    "deterministic": True,
     "precision": 32
 }
 config["datamodule"] = {
@@ -115,10 +120,8 @@ config["datamodule"] = {
         "feat_max_length": 400,
         "select_col": [f"x_right_hand_{i}" for i in range(21)] \
                       + [f"y_right_hand_{i}" for i in range(21)] \
-                    #   + [f"z_right_hand_{i}" for i in range(21)] \
                       + [f"x_left_hand_{i}" for i in range(21)] \
                       + [f"y_left_hand_{i}" for i in range(21)] \
-                    #   + [f"z_left_hand_{i}" for i in range(21)] \
                       + [f"x_face_{i}" for i in [
                             61, 185, 40, 39, 37, 0, 267, 269, 270, 409,
                             291, 146, 91, 181, 84, 17, 314, 405, 321, 375,
@@ -131,12 +134,6 @@ config["datamodule"] = {
                             78, 191, 80, 81, 82, 13, 312, 311, 310, 415,
                             95, 88, 178, 87, 14, 317, 402, 318, 324, 308
                         ]] \
-                    #   + [f"z_face_{i}" for i in [
-                    #         61, 185, 40, 39, 37, 0, 267, 269, 270, 409,
-                    #         291, 146, 91, 181, 84, 17, 314, 405, 321, 375,
-                    #         78, 191, 80, 81, 82, 13, 312, 311, 310, 415,
-                    #         95, 88, 178, 87, 14, 317, 402, 318, 324, 308
-                    #     ]] \
                       + [f"x_pose_{i}" for i in [
                           13, 15, 17, 19, 21, 14, 16, 18, 20, 22
                         ]] \
@@ -149,6 +146,6 @@ config["datamodule"] = {
     },
     "dataloader": {
         "batch_size": 128,
-        "num_workers": 8
+        "num_workers": 4
     }
 }
