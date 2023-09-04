@@ -2,16 +2,14 @@ config = {
     "random_seed": 57,
     "pred_device": "cuda",
     "n_splits": 5,
+    "train_folds": [0],
     "label": "phrase",
     "experiment_name": "asl-trial-v2",
     "path": {
         "dataset": "/kaggle/input/asl-fingerspelling/",
-        "traindata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
-        "trainmeta": "/kaggle/input/asl-fingerspelling/train.csv",
-        "testdata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
-        "testmeta": "/kaggle/input/asl-fingerspelling/train.csv",
-        "preddata": "/kaggle/input/asl-fingerspelling/train_landmarks/",
-        "predmeta": "/kaggle/input/asl-fingerspelling/train.csv",
+        "trainmeta": "/kaggle/input/asl-fingerspelling/train_th_0.5.csv",
+        "testmeta": "/kaggle/input/asl-fingerspelling/train_th_0.5.csv",
+        "predmeta": "/kaggle/input/asl-fingerspelling/train_th_0.5.csv",
         "vocab_file": "/kaggle/input/asl-fingerspelling/character_to_prediction_index.json",
         "norm_factor": "/workspace/data/norm_factor_trial_v2.csv",
         "temporal_dir": "../tmp/artifacts/",
@@ -25,6 +23,7 @@ config = {
         "unk_token_id": 61,
         "pad_token_id": 62,
     },
+    "max_phrase_length": 30,
     "modelname": "best_loss",
     "monitor": {
         "cross_valid": {
@@ -48,14 +47,18 @@ config["augmentation"] = {
 config["metrics"] = {
     "levenshtein_distance": {
         "charmap_path": config["path"]["vocab_file"],
+        "eos_token_id": config["special_token_ids"]["eos_token_id"],
         "normalize": True,
     }
 }
 config["model"] = {
     "ClassName": "TransformerforASLModel",
     "gradient_checkpointing": True,
-    "fillna_val": 0.0,
-    "norm_factor_path": config["path"]["norm_factor"],
+    "Preprocessor": {
+        "norm_factor_path": config["path"]["norm_factor"],
+        "fillna_val": 0.0,
+        "device": config["pred_device"],
+    },
     "Transformer": {
         "dim_model": 184,
         "dim_output": 63,
@@ -64,8 +67,9 @@ config["model"] = {
         "bos_idx": config["special_token_ids"]["bos_token_id"],
         "pad_idx": config["special_token_ids"]["pad_token_id"],
         "max_len_encoder": 1000,
-        "max_len_decoder": 50,
-        "n_layer": 4,
+        "max_len_decoder": config["max_phrase_length"],
+        "n_encoder_layer": 6,
+        "n_decoder_layer": 2,
         "n_head": 8,
         "dropout_rate": 0.0,
         "layer_norm_eps": 1e-7,
@@ -90,13 +94,10 @@ config["model"] = {
     "scheduler":{
         "name": "optim.lr_scheduler.CosineAnnealingWarmRestarts",
         "params":{
-            "T_0": 40,
+            "T_0": 60,
             "eta_min": 0,
         }
     }
-}
-config["earlystopping"] = {
-    "patience": 3
 }
 config["checkpoint"] = {
     "dirpath": config["path"]["model_dir"],
@@ -107,7 +108,7 @@ config["checkpoint"] = {
 config["trainer"] = {
     "accelerator": "gpu",
     "devices": 1,
-    "max_epochs": 20,
+    "max_epochs": 60,
     "accumulate_grad_batches": 1,
     "deterministic": True,
     "precision": 32
@@ -115,7 +116,7 @@ config["trainer"] = {
 config["datamodule"] = {
     "ClassName": "DataModule",
     "dataset":{
-        "ClassName": "T5ForASLDataset",
+        "ClassName": "TransformerForASLDataset",
         "label": config["label"],
         "feat_max_length": 400,
         "select_col": [f"x_right_hand_{i}" for i in range(21)] \
@@ -140,7 +141,7 @@ config["datamodule"] = {
                       + [f"y_pose_{i}" for i in [
                           13, 15, 17, 19, 21, 14, 16, 18, 20, 22
                         ]],
-        "phrase_max_length": 35,
+        "max_phrase_length": config["max_phrase_length"],
         "path": config["path"],
         "special_token_ids": config["special_token_ids"],
     },
