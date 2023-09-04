@@ -31,36 +31,29 @@ def display_now() -> str:
 
 
 def convert_torch_to_onnx(
-    torch_model_path: str,
+    model: nn.Module,
+    inputs_sample: tuple[torch.Tensor] | torch.Tensor,
+    input_names: list[str] | str,
+    output_names: list[str] | str,
+    dynamic_axes: dict[str, dict[int, str]],
     onnx_model_path: str,
-    Model: LightningModule,
-    config: dict[str, Any],
     *,
-    device: str = "cpu",
     opset_version: int = 12,
 ) -> None:
-    print("\n\33[32m[convert torch to onnx]\33[0m")
+    print(f"\n\33[32m[convert torch to onnx]\33[0m")
+    print(f"  \n\33[32m-> {onnx_model_path}\33[0m")
     print(f"  start: {display_now()}")
     try:
-        model: nn.Module = Model.load_from_checkpoint(
-            torch_model_path,
-            config=config["model"],
-        ).to(device)
-        inputs_sample: torch.Tensor = torch.randn(1, 10, config["model"]["dim_input"]).to(
-            device
-        )
         torch.onnx.export(
             model,
             inputs_sample,
             onnx_model_path,
             opset_version=opset_version,
             export_params=True,
-            input_names=["inputs"],
-            output_names=["outputs"],
-            dynamic_axes={
-                "inputs": {1: "length"},
-                "outputs": {1: "length"},
-            },
+            do_constant_folding=False,
+            input_names=input_names,
+            output_names=output_names,
+            dynamic_axes=dynamic_axes,
         )
     except:
         print(f"\33[31m{traceback.format_exc()}\33[0m")
@@ -69,7 +62,8 @@ def convert_torch_to_onnx(
 
 
 def convert_onnx_to_tf(onnx_model_path: str, tf_model_path: str) -> None:
-    print("\n\33[32m[convert onnx to tf]\33[0m")
+    print(f"\n\33[32m[convert onnx to tf]\33[0m")
+    print(f"  \n\33[32m-> {tf_model_path}\33[0m")
     print(f"  start: {display_now()}")
     try:
         onnx_model = onnx.load(onnx_model_path)
@@ -80,41 +74,6 @@ def convert_onnx_to_tf(onnx_model_path: str, tf_model_path: str) -> None:
         raise
     print(f"  end: {display_now()}")
 
-def convert_tf_to_tflitebase(
-    tf_model_path: str,
-    tflite_basemodel_path: str,
-    dim_input: int,
-):
-    print("\n\33[32m[convert tf to tflitebase]\33[0m")
-    print(f"  start: {display_now()}")
-
-    class TFLiteModel(tf.Module):
-        def __init__(self, model):
-            super(TFLiteModel, self).__init__()
-            self.infer = model.signatures["serving_default"]
-
-        @tf.function(input_signature=[
-            tf.TensorSpec(shape=[None, dim_input], dtype=tf.float32, name='inputs')])
-        def __call__(self, inputs, training=False):
-            # Preprocess Data
-            x = tf.cast(inputs, tf.float32)
-            x = x[None]
-            x = tf.identity(x)
-            x = tf.cond(
-                tf.shape(x)[1] == 0,
-                lambda: tf.zeros((1, 1, dim_input)),
-                lambda: tf.identity(x),
-            )
-            x = self.infer(x)
-            return {'outputs': x["outputs"][0]}
-
-    try:
-        tflite_basemodel = TFLiteModel(tf.saved_model.load(tf_model_path))
-        tf.saved_model.save(tflite_basemodel, tflite_basemodel_path)
-    except:
-        print(f"\33[31m{traceback.format_exc()}\33[0m")
-        raise
-    print(f"  end: {display_now()}")
 
 def convert_tf_to_tflite(
     tf_model_path: str,
@@ -122,7 +81,8 @@ def convert_tf_to_tflite(
     *,
     dtype: str = "float32",
 ):
-    print("\n\33[32m[convert tf to tflite]\33[0m")
+    print(f"\n\33[32m[convert tf to tflite]\33[0m")
+    print(f"  \n\33[32m-> {tflite_model_path}\33[0m")
     print(f"  start: {display_now()}")
     try:
         converter = tf.lite.TFLiteConverter.from_saved_model(tf_model_path)
@@ -136,6 +96,91 @@ def convert_tf_to_tflite(
         tflite_model = converter.convert()
         with open(tflite_model_path, "wb") as f:
             f.write(tflite_model)
+    except:
+        print(f"\33[31m{traceback.format_exc()}\33[0m")
+        raise
+    print(f"  end: {display_now()}")
+
+
+def construct_tflitebase_for_asl(
+    tf_preprocessor_path: str,
+    tf_encoder_path: str,
+    tf_decoder_path: str,
+    tf_linear_path: str,
+    bos_embed: NDArray,
+    max_phrase_length: int,
+    eos_token_id: int,
+    dim_input: int,
+    tflite_basemodel_path: str,
+):
+
+    print(f"\n\33[32m[convert tf to tflitebase]\33[0m")
+    print(f"  \n\33[32m-> {tflite_basemodel_path}\33[0m")
+    print(f"  start: {display_now()}")
+
+    class TFLiteModel(tf.Module):
+        def __init__(
+                self,
+                preprocessor,
+                encoder,
+                decoder,
+                linear,
+                bos_embed: NDArray,
+                max_phrase_length: int,
+                eos_token_id: int,
+            ) -> None:
+            super(TFLiteModel, self).__init__()
+            self.preprocessor = preprocessor.signatures["serving_default"]
+            self.encoder = encoder.signatures["serving_default"]
+            self.decoder = decoder.signatures["serving_default"]
+            self.linear = linear.signatures["serving_default"]
+            self.bos_embed: tf.Tensor = tf.constant(bos_embed, tf.float32)
+            self.max_phrase_length: int = max_phrase_length
+            self.eos_token_id: int = eos_token_id
+
+        @tf.function(input_signature=[
+            tf.TensorSpec(shape=[None, dim_input], dtype=tf.float32, name='inputs')])
+        def __call__(self, inputs, training=False):
+            # Preprocess Data
+            x: tf.Tensor = tf.cast(inputs, tf.float32)
+            x = x[None]
+            x = tf.cond(
+                tf.shape(x)[1] == 0,
+                lambda: tf.zeros((1, 1, dim_input)),
+                lambda: tf.identity(x),
+            )
+            x = self.preprocessor(x)["outputs"]
+            src: tf.Tensor = self.encoder(x)["encoder_hidden_state"]
+            tgt: tf.Tensor = self.bos_embed
+
+            stop: bool = False
+            for _ in range(self.max_phrase_length):
+                if stop:
+                    continue
+                decoder_hidden_state: tf.Tensor = self.decoder(
+                    source=src, target=tgt)["outputs"]
+                tgt = tf.concat([self.bos_embed, decoder_hidden_state], axis=1)
+                stop = self._is_eos(decoder_hidden_state)
+            outputs: tf.Tensor = self.linear(tgt[:, 1:, :])["outputs"]
+            return {'outputs': outputs[0]}
+
+        def _is_eos(self, decoder_hidden_state: tf.Tensor) -> bool:
+            tail_id: int = tf.math.argmax(
+                self.linear(decoder_hidden_state)["outputs"], axis=1,
+            )[0, -1]
+            return (tail_id  == self.eos_token_id)
+
+    try:
+        tflite_basemodel: TFLiteModel = TFLiteModel(
+            tf.saved_model.load(tf_preprocessor_path),
+            tf.saved_model.load(tf_encoder_path),
+            tf.saved_model.load(tf_decoder_path),
+            tf.saved_model.load(tf_linear_path),
+            bos_embed,
+            max_phrase_length,
+            eos_token_id,
+        )
+        tf.saved_model.save(tflite_basemodel, tflite_basemodel_path)
     except:
         print(f"\33[31m{traceback.format_exc()}\33[0m")
         raise
@@ -224,7 +269,7 @@ def import_classes(config: dict[str, Any]) -> LightningModule:
 
 
 def get_args() -> Namespace:
-    parser = argparse.ArgumentParser()
+    parser: argparse.ArgumentParser = argparse.ArgumentParser()
     parser.add_argument(
         "-c", "--config", help="stem of config filepath.", type=str, required=True
     )
@@ -241,56 +286,164 @@ def get_args() -> Namespace:
 
 def debug_preprocess():
     from config.sample import config
-    debug = True
+    from config.asl_trial_v2 import config
+    debug = False
     modelname = config["modelname"]
 
 if __name__ == "__main__":
 
     # args
-    args = get_args()
-    config = importlib.import_module(f"config.{args.config}").config
+    args: argparse.Namespace = get_args()
+    config: dict[str, Any] = importlib.import_module(f"config.{args.config}").config
 
     # const
     device: str = config["pred_device"]
-    dim_input: int = config["model"]["dim_input"]
+    dim_input: int = config["model"]["Transformer"]["dim_model"]
     debug: bool = args.debug
     modelname: str = args.input or config["modelname"]
 
     # path
     dirpath_model: str = config["path"]["model_dir"]
     torch_model_path: str = f"{dirpath_model}/{modelname}.ckpt"
-    onnx_model_path: str = f"{dirpath_model}/{modelname}.onnx"
-    tf_model_path: str = f"{dirpath_model}/{modelname}.tf"
+    onnx_model_paths: dict[str, str] = {
+        "preprocessor": f"{dirpath_model}/preprocessor.onnx",
+        "encoder": f"{dirpath_model}/encoder.onnx",
+        "decoder": f"{dirpath_model}/decoder.onnx",
+        "linear": f"{dirpath_model}/linear.onnx",
+    }
+    tf_model_paths: dict[str, str] = {
+        "preprocessor": f"{dirpath_model}/preprocessor.tf",
+        "encoder": f"{dirpath_model}/encoder.tf",
+        "decoder": f"{dirpath_model}/decoder.tf",
+        "linear": f"{dirpath_model}/linear.tf",
+    }
     tflite_basemodel_path: str = f"{dirpath_model}/basemodel_for_tflite.tf"
-    tflite_model_path: str = f"{tf_model_path}/model.tflite"
+    tflite_model_path: str = f"{dirpath_model}/model.tflite"
     inference_args_path: str = f"{dirpath_model}/inference_args.json"
     submission_path: str = f"{dirpath_model}/submission.zip"
 
     # preprocess
-    if os.path.exists(onnx_model_path):
-        os.remove(onnx_model_path)
-    if os.path.exists(tf_model_path):
-        shutil.rmtree(tf_model_path)
+    for onnx_model_path in onnx_model_paths.values():
+        if os.path.exists(onnx_model_path):
+            os.remove(onnx_model_path)
+    for tf_model_path in tf_model_paths.values():
+        if os.path.exists(tf_model_path):
+            shutil.rmtree(tf_model_path)
     if os.path.exists(tflite_basemodel_path):
         shutil.rmtree(tflite_basemodel_path)
     if os.path.exists(inference_args_path):
         os.remove(inference_args_path)
     if os.path.exists(submission_path):
         os.remove(submission_path)
-    Model = import_classes(config)
+    Model: type = import_classes(config)
+
+    model: nn.Module = Model.load_from_checkpoint(
+        torch_model_path, config=config["model"])
+
+    # const
+    bos_embed: torch.Tensor = model.transformer.embedding(
+        torch.tensor([[config["special_token_ids"]["bos_token_id"]]]).cuda())
+    max_phrase_length: int = config["max_phrase_length"]
+    eos_token_id: int = config["special_token_ids"]["eos_token_id"]
+
+    # models
+    preprocessor: nn.Module = model.preprocessor
+    encoder: nn.Module = model.transformer.encoder
+    decoder: nn.Module = model.transformer.decoder
+    linear: nn.Module = model.transformer.linear
+
+    # onnx settings
+    src_embed_sample: torch.Tensor = torch.randn(
+        1, 10, config["model"]["Transformer"]["dim_model"]).cuda()
+    tgt_embed_sample: torch.Tensor = torch.randn(
+        1, 10, config["model"]["Transformer"]["dim_model"]).cuda()
+    input_names: dict[str, list[str]] = {
+        "preprocessor": ["inputs"],
+        "encoder": ["inputs"],
+        "decoder": ["source", "target"],
+        "linear": ["inputs"],
+    }
+    output_names: dict[str, list[str]] = {
+        "preprocessor": ["outputs"],
+        "encoder": ["encoder_hidden_state"],
+        "decoder": ["outputs"],
+        "linear": ["outputs"],
+    }
+    dynamic_axes: dict[str, dict[str, dict[int, str]]] = {
+        "preprocessor": {
+            "inputs": {1: "length"},
+            "outputs": {1: "length"},
+        },
+        "encoder": {
+            "inputs": {1: "length"},
+            "encoder_hidden_state": {1: "length"},
+        },
+        "decoder": {
+            "source": {1: "length"},
+            "target": {1: "length"},
+            "outputs": {1: "length"},
+        },
+        "linear": {
+            "inputs": {1: "length"},
+            "outputs": {1: "length"},
+        },
+    }
 
     # convert pytorch_checkpoint to tflite
     convert_torch_to_onnx(
-        torch_model_path,
-        onnx_model_path,
-        Model,
-        config,
-        device=device,
+        preprocessor,
+        src_embed_sample,
+        input_names=input_names["preprocessor"],
+        output_names=output_names["preprocessor"],
+        dynamic_axes=dynamic_axes["preprocessor"],
+        onnx_model_path=onnx_model_paths["preprocessor"],
     )
-    convert_onnx_to_tf(onnx_model_path, tf_model_path)
-    convert_tf_to_tflitebase(tf_model_path, tflite_basemodel_path, dim_input=dim_input)
+    convert_torch_to_onnx(
+        encoder,
+        src_embed_sample,
+        input_names=input_names["encoder"],
+        output_names=output_names["encoder"],
+        dynamic_axes=dynamic_axes["encoder"],
+        onnx_model_path=onnx_model_paths["encoder"],
+    )
+    convert_torch_to_onnx(
+        decoder,
+        (src_embed_sample, tgt_embed_sample),
+        input_names=input_names["decoder"],
+        output_names=output_names["decoder"],
+        dynamic_axes=dynamic_axes["decoder"],
+        onnx_model_path=onnx_model_paths["decoder"],
+    )
+    convert_torch_to_onnx(
+        linear,
+        tgt_embed_sample,
+        input_names=input_names["linear"],
+        output_names=output_names["linear"],
+        dynamic_axes=dynamic_axes["linear"],
+        onnx_model_path=onnx_model_paths["linear"],
+    )
+
+    # convert onnx to tensorflow
+    convert_onnx_to_tf(onnx_model_paths["preprocessor"], tf_model_paths["preprocessor"])
+    convert_onnx_to_tf(onnx_model_paths["encoder"], tf_model_paths["encoder"])
+    convert_onnx_to_tf(onnx_model_paths["decoder"], tf_model_paths["decoder"])
+    convert_onnx_to_tf(onnx_model_paths["linear"], tf_model_paths["linear"])
+
+    # constract submission_model
+    construct_tflitebase_for_asl(
+        tf_model_paths["preprocessor"],
+        tf_model_paths["encoder"],
+        tf_model_paths["decoder"],
+        tf_model_paths["linear"],
+        bos_embed.detach().cpu().numpy(),
+        max_phrase_length,
+        eos_token_id,
+        dim_input,
+        tflite_basemodel_path,
+    )
+
+    # convert tensorflow to tflite
     convert_tf_to_tflite(tflite_basemodel_path, tflite_model_path)
-    # convert_tf_to_tflite(tf_model_path, tflite_model_path, dtype=dtype)
     inference_args: dict[str, list[str]] = define_inference_args(config)
     write_json(inference_args_path, inference_args)
 
@@ -306,10 +459,9 @@ if __name__ == "__main__":
             dim=len(inference_args["selected_columns"]),
             dtype="float32",
         )
-        result_onnx = run_onnx(onnx_model_path, dummy_inputs[None])
-        result_tf = run_tf(tf_model_path, dummy_inputs[None])
+        dummy_inputs_torch: torch.Tensor = torch.tensor(
+            dummy_inputs, dtype=torch.float32).to(device)
+        result_torch = model(dummy_inputs_torch[None])
         result_tflite = run_tflite(tflite_model_path, dummy_inputs)
         print("\n\33[32m[debug]\33[0m")
-        print(f"  RMSE(onnx, tf): {rmse(result_onnx, result_tf):.3e}")
-        print(f"  RMSE(tf, tflite): {rmse(result_tf, result_tflite):.3e}")
-        print(f"  RMSE(onnx, tflite): {rmse(result_onnx, result_tflite):.3e}")
+        print(f"  RMSE(torch, tflite): {rmse(result_torch.detach().cpu().numpy(), result_tflite):.3e}")
