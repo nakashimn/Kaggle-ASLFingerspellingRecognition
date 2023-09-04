@@ -4,14 +4,18 @@ import random
 import sys
 import traceback
 
+import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import torchvision.transforms as T
+import torchvision.transforms.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-from components.datamodule import DataModule, ImgDataset, T5ForASLDataset
+from components.datamodule import DataModule, ImgDataset, TransformerForASLDataset
 from components.preprocessor import DataPreprocessor
 from config.sample import config
 
@@ -26,7 +30,7 @@ df_pred = data_preprocessor.pred_dataset()
 
 # DataSet
 try:
-    dataset = T5ForASLDataset(
+    dataset = TransformerForASLDataset(
         df_train,
         config["datamodule"]["dataset"]
     )
@@ -70,3 +74,21 @@ try:
     )
 except:
     print(traceback.format_exc())
+
+
+x = torch.randn(3,4)
+x = x[None]
+
+
+features = pd.read_parquet(
+    "/workspace/kaggle/input/asl-fingerspelling/train_landmarks/5414471.parquet",
+    columns=config["datamodule"]["dataset"]["select_col"]).loc[1848125865]
+
+features = features.fillna(0.0)
+feat = features.values
+feat.shape
+feat_ = np.pad(feat, [[0, 0], [0, 0]], "constant", constant_values=0.0)
+feat__ = cv2.resize(feat_, [184, 128])
+
+plt.imshow(feat_)
+plt.imshow(feat__)
