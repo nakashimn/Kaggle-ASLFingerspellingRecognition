@@ -1,4 +1,5 @@
 import torch
+from numpy.typing import NDArray
 from torch import nn
 
 ################################################################################

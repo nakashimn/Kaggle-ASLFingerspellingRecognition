@@ -410,8 +410,8 @@ class TransformerforASLModel(LightningModule):
 
         # const
         self.config: dict[str, Any] = config
-        self.normalizer: nn.Module = self._create_normalizer()
-        self.model: nn.Module = self._create_model()
+        self.preprocessor: nn.Module = Preprocessor(**config["Preprocessor"])
+        self.transformer: nn.Module = Transformer(**config["Transformer"])
         self.criterion: nn.Module = eval(config["loss"]["name"])(
             **self.config["loss"]["params"]
         )
@@ -424,31 +424,14 @@ class TransformerforASLModel(LightningModule):
         self.validation_step_outputs: list[dict[str, Any]] = []
         self.min_loss: float = np.nan
 
-    def _create_normalizer(self) -> nn.Module:
-        means, stds = self._read_norm_factor()
-        normalizer: nn.Module = Normalization(means, stds, device="cuda")
-        return normalizer
-
-    def _read_norm_factor(self) -> tuple[torch.Tensor]:
-        norm_factor: pd.DataFrame = pd.read_csv(
-            self.config["norm_factor_path"], index_col=0)
-        means: torch.Tensor = torch.tensor(norm_factor.loc["mean"]).to("cuda")
-        stds: torch.Tensor = torch.tensor(norm_factor.loc["std"]).to("cuda")
-        return means, stds
-
-    def _create_model(self) -> nn.Module:
-        model: nn.Module = Transformer(**self.config["Transformer"])
-        return model
-
     def forward(
             self,
             input_embeds: torch.Tensor,
             attention_mask: torch.Tensor | None = None,
             labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor] | torch.Tensor:
-        input_embeds[torch.isnan(input_embeds)] = self.config["fillna_val"]
-        x: torch.Tensor = self.normalizer(input_embeds)
-        outputs: torch.Tensor = self.model(x, labels, attention_mask)
+        x: torch.Tensor = self.preprocessor(input_embeds)
+        outputs: torch.Tensor = self.transformer(x, labels, attention_mask)
         return outputs
 
     def training_step(
@@ -510,15 +493,15 @@ class TransformerforASLModel(LightningModule):
         self.training_step_outputs.clear()
         return super().on_train_epoch_end()
 
-    def on_validation_epoch_end(self) -> None:
-        loss: float = np.mean(
-            [out["loss"].cpu().numpy() for out in self.validation_step_outputs]
-        )
-        logits: torch.Tensor = torch.cat(
-            [out["logit"] for out in self.validation_step_outputs]
-        )
-        self.validation_step_outputs.clear()
-        return super().on_validation_epoch_end()
+    # def on_validation_epoch_end(self) -> None:
+    #     loss: float = np.mean(
+    #         [out["loss"].cpu().numpy() for out in self.validation_step_outputs]
+    #     )
+    #     logits: torch.Tensor = torch.cat(
+    #         [out["logit"] for out in self.validation_step_outputs]
+    #     )
+    #     self.validation_step_outputs.clear()
+    #     return super().on_validation_epoch_end()
 
     def configure_optimizers(self) -> tuple[list, list]:
         optimizer = eval(self.config["optimizer"]["name"])(
@@ -528,6 +511,37 @@ class TransformerforASLModel(LightningModule):
             optimizer, **self.config["scheduler"]["params"]
         )
         return [optimizer], [scheduler]
+
+class Preprocessor(nn.Module):
+    def __init__(
+            self,
+            norm_factor_path: str,
+            fillna_val: float = 0.0,
+            device: str = "cpu",
+    ) -> None:
+        super().__init__()
+        self.norm_factor_path: str = norm_factor_path
+        self.fillna_val: float = fillna_val
+        self.device: str = device
+        self.normalization: nn.Module = self._create_normalizer()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.normalization(x)
+        x[torch.isnan(x)] = self.fillna_val
+        return x
+
+    def _create_normalizer(self) -> nn.Module:
+        means, stds = self._read_norm_factor()
+        normalizer: nn.Module = Normalization(means, stds, device=self.device)
+        return normalizer
+
+    def _read_norm_factor(self) -> tuple[torch.Tensor]:
+        norm_factor: pd.DataFrame = pd.read_csv(
+            self.norm_factor_path, index_col=0)
+        means: torch.Tensor = torch.tensor(norm_factor.loc["mean"]).to(self.device)
+        stds: torch.Tensor = torch.tensor(norm_factor.loc["std"]).to(self.device)
+        return means, stds
+
 
 class Normalization(nn.Module):
     def __init__(
@@ -541,7 +555,7 @@ class Normalization(nn.Module):
         self.inv_stds: torch.Tensor = (1 / stds).float().to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.where(x != 0, torch.mul(x - self.means, self.inv_stds), 0).detach()
+        return torch.mul(x - self.means, self.inv_stds).detach()
 
 ################################################################################
 # Transformer(Scratch)
@@ -565,7 +579,8 @@ class Transformer(nn.Module):
         pad_idx: int,
         max_len_encoder: int,
         max_len_decoder: int,
-        n_layer: int,
+        n_encoder_layer: int,
+        n_decoder_layer: int,
         n_head: int,
         dropout_rate: float = 0.0,
         layer_norm_eps: float = 1e-7,
@@ -581,7 +596,8 @@ class Transformer(nn.Module):
         self.pad_idx: int = pad_idx
         self.max_len_encoder: int = max_len_encoder
         self.max_len_decoder: int = max_len_decoder
-        self.n_layer: int = n_layer
+        self.n_encoder_layer: int = n_encoder_layer
+        self.n_decoder_layer: int = n_decoder_layer
         self.n_head: int = n_head
         self.dropout_rate: float = dropout_rate
         self.layer_norm_eps: float = layer_norm_eps
@@ -589,14 +605,14 @@ class Transformer(nn.Module):
         self.device: str = device
 
         self.encoder: nn.Module = TransformerEncoder(
-            dim_model, dim_ff, max_len_encoder, n_layer, n_head,
+            dim_model, dim_ff, max_len_encoder, n_encoder_layer, n_head,
             dropout_rate, layer_norm_eps, prenorm, device,
         )
 
         self.embedding: nn.Module = nn.Embedding(
             vocab_size, dim_model, pad_idx, device=device)
         self.decoder: nn.Module = TransformerDecoder(
-            dim_model, dim_ff, max_len_decoder, n_layer, n_head,
+            dim_model, dim_ff, max_len_decoder, n_decoder_layer, n_head,
             dropout_rate, layer_norm_eps, prenorm, device,
         )
 
@@ -664,7 +680,11 @@ class Transformer(nn.Module):
         dec_output: torch.Tensor = self.decoder(src, tgt, src_pad_mask, mask_self_attn)
         return self.linear(dec_output)
 
-    def _extend_mask(self, mask: torch.Tensor, seq_len: int) -> torch.Tensor | None:
+    def _extend_mask(
+        self,
+        mask: torch.Tensor | None,
+        seq_len: int,
+    ) -> torch.Tensor | None:
         if mask is None:
             return None
         mask = mask.unsqueeze(dim=1)
@@ -995,3 +1015,144 @@ class FeedForward(nn.Module):
         x = self.relu(x)
         x = self.linear2(x)
         return x
+
+################################################################################
+# TransformerEncoder for ASL
+################################################################################
+class TfEncoderforASLModel(LightningModule):
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__()
+
+        # const
+        self.config: dict[str, Any] = config
+        self.preprocessor: nn.Module = Preprocessor(**config["Preprocessor"])
+        self.encoder: nn.Module = TransformerEncoder(**config["TfEncoder"])
+        self.linear: nn.Module = nn.Linear(
+            config["TfEncoder"]["dim_inout"], config["dim_output"], bias=True,
+        )
+        self.criterion: nn.Module = nn.CTCLoss(**self.config["loss"]["params"])
+        self.levenshtein_distance: LevenshteinDistance = LevenshteinDistance(
+            self.config["metrics"]["levenshtein_distance"]
+        )
+
+        # variables
+        self.training_step_outputs: list[dict[str, Any]] = []
+        self.validation_step_outputs: list[dict[str, Any]] = []
+        self.min_loss: float = np.nan
+
+    def forward(
+            self,
+            input_embeds: torch.Tensor,
+            attention_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor] | torch.Tensor:
+        x: torch.Tensor = self.preprocessor(input_embeds)
+        src_pad_mask: torch.Tensor | None = self._extend_mask(
+            attention_mask, x.size(1))
+        x = self.encoder(x, src_pad_mask)
+        outputs: torch.Tensor = self.linear(x)
+        return outputs
+
+    def training_step(
+            self, batch: torch.Tensor | tuple[torch.Tensor], batch_idx: int
+    ) -> dict[str, torch.Tensor]:
+        input_embeds, attention_mask, labels = batch
+        logits: torch.Tensor = self.forward(input_embeds, attention_mask)
+        # calc CTC loss
+        input_lengths: torch.Tensor = (~attention_mask.detach()).sum(dim=1)
+        target_lengths: torch.Tensor = (
+            labels != self.config["blank_token_id"]).clone().detach().sum(dim=1)
+        loss: torch.Tensor = self.criterion(
+            logits.log_softmax(dim=2).transpose(0, 1),
+            labels, input_lengths, target_lengths,
+        )
+        self.training_step_outputs.append({"loss": loss.detach()})
+        self.log(
+            f"train_loss", loss.detach(),
+            prog_bar=True, logger=True, on_epoch=True, on_step=True,
+        )
+        return loss
+
+    def validation_step(
+            self, batch: torch.Tensor, batch_idx: int
+    ) -> dict[str, torch.Tensor]:
+        input_embeds, attention_mask, labels = batch
+        logits: torch.Tensor = self.forward(input_embeds, attention_mask)
+        input_lengths: torch.Tensor = (~attention_mask.detach()).sum(dim=1)
+        target_lengths: torch.Tensor = (
+            labels != self.config["blank_token_id"]).clone().detach().sum(dim=1)
+        loss: torch.Tensor = self.criterion(
+            logits.log_softmax(dim=2).transpose(0, 1),
+            labels, input_lengths, target_lengths,
+        )
+        self.validation_step_outputs.append(
+            {"loss": loss.detach(), "logit": logits.detach(), "label": labels.detach()}
+        )
+        self.log(
+            f"val_loss", loss.detach(),
+            prog_bar=True, logger=True, on_epoch=True, on_step=False,
+        )
+
+        # CTC Postprocess
+        result_ids: NDArray = logits.detach().argmax(dim=2).cpu()
+        valids: torch.Tensor = (result_ids.diff(dim=1) != 0)
+        masks: torch.Tensor = torch.concat(
+            [torch.ones([logits.size(0), 1], dtype=bool), valids], dim=1)
+        result_ids = torch.where(masks, result_ids, self.config["blank_token_id"])
+        # calc LevenshteinDistance
+        ld_score: float = self.levenshtein_distance.calc(
+            result_ids.numpy(), labels.detach().cpu().numpy()).mean()
+        self.log(
+            f"levenshtein_distance", ld_score,
+            prog_bar=True, logger=True, on_epoch=True, on_step=False,
+        )
+
+        return loss
+
+    def predict_step(
+        self, batch: torch.Tensor, batch_idx: int
+    ) -> dict[str, torch.Tensor]:
+        input_embeds: torch.Tensor = batch
+        rslt_embeds: torch.Tensor = self.forward(input_embeds)
+        return {"outputs": rslt_embeds}
+
+    def _extend_mask(
+        self,
+        mask: torch.Tensor | None,
+        seq_len: int,
+    ) -> torch.Tensor | None:
+        if mask is None:
+            return None
+        mask = mask.unsqueeze(dim=1)
+        mask = mask.repeat(1, seq_len, 1)
+        return mask.detach().to(self.device)
+
+    def on_train_epoch_end(self) -> None:
+        loss: float = np.mean(
+            [out["loss"].cpu().numpy() for out in self.training_step_outputs]
+        )
+        self.min_loss = np.nanmin([self.min_loss, loss])
+        self.training_step_outputs.clear()
+        return super().on_train_epoch_end()
+
+    def on_validation_epoch_end(self) -> None:
+        if len(self.validation_step_outputs) == 0:
+            return super().on_validation_epoch_end()
+        logit = self.validation_step_outputs[0]["logit"][0]
+        label = self.validation_step_outputs[0]["label"][0]
+        result_ids: NDArray = logit.detach().argmax(dim=1).cpu()
+        pred_sample: str = self.levenshtein_distance._convert_ids_to_chars(
+            result_ids.numpy())
+        label_sample: str = self.levenshtein_distance._convert_ids_to_chars(
+            label.cpu().numpy())
+        self.validation_step_outputs.clear()
+        print(f"\npred: {pred_sample[:10]} / label: {label_sample[:10]}\n")
+        return super().on_validation_epoch_end()
+
+    def configure_optimizers(self) -> tuple[list, list]:
+        optimizer = eval(self.config["optimizer"]["name"])(
+            self.parameters(), **self.config["optimizer"]["params"]
+        )
+        scheduler = eval(self.config["scheduler"]["name"])(
+            optimizer, **self.config["scheduler"]["params"]
+        )
+        return [optimizer], [scheduler]

@@ -12,6 +12,7 @@ from pytorch_lightning import LightningDataModule
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms as Tv
+from torchvision.transforms import functional as Fv
 
 ################################################################################
 # TypeAlias
@@ -141,9 +142,9 @@ class AudioDataset(Dataset):
         return [1 if l in series else 0 for l in self.config["labels"]]
 
 ################################################################################
-# For T5forASLModel
+# For TransformerForASLModel
 ################################################################################
-class T5ForASLDataset(Dataset):
+class TransformerForASLDataset(Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
@@ -207,14 +208,14 @@ class T5ForASLDataset(Dataset):
 
     def _phrase_to_ids(self, phrase: str) -> torch.Tensor:
         pad_length: int = self._calc_pad_length(
-            phrase, self.config["phrase_max_length"] - 2)
+            phrase, self.config["max_phrase_length"] - 2)
         ids: list[int] = \
             [self.config["special_token_ids"]["bos_token_id"]] \
             + [self.character_map.get(
                 s, self.config["special_token_ids"]["unk_token_id"]) for s in phrase] \
             + [self.config["special_token_ids"]["eos_token_id"]] \
             + [self.config["special_token_ids"]["pad_token_id"]] * pad_length
-        ids = ids[:self.config["phrase_max_length"]]
+        ids = ids[:self.config["max_phrase_length"]]
         return torch.tensor(ids, dtype=int)
 
     @staticmethod
@@ -232,6 +233,94 @@ class T5ForASLDataset(Dataset):
         ]
         return labels
 
+
+class TfEncoderForASLDataset(Dataset):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        config: dict[str, Any],
+        transform: Transforms | None = None,
+    ) -> None:
+        self.config: dict[str, Any] = config
+        self.df: pd.DataFrame = df
+        self.data_ids: NDArray = np.arange(df.shape[0])
+        self.character_map: dict[str, int] = self._read_character_map()
+        self.labels: torch.Tensor | None = None
+        if self.config["label"] in df.keys():
+            self.labels = self._read_labels(df[self.config["label"]])
+        self.transform: Transforms | None = transform
+
+    def __len__(self) -> int:
+        return len(self.data_ids)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor]:
+        input_embeds, attention_mask = self._read_embeds(idx)
+        if self.transform is not None:
+            input_embeds = self.transform(input_embeds)
+        if self.labels is not None:
+            labels: torch.Tensor = self.labels[idx]
+            return input_embeds, attention_mask, labels
+        return input_embeds, attention_mask
+
+    def _read_embeds(self, idx: int) -> tuple[torch.Tensor]:
+        features: NDArray = self._read_features(idx)
+        pad_length: int = self._calc_pad_length(
+            features, self.config["feat_max_length"]
+        )
+        try:
+            features =np.pad(features, [[0, pad_length], [0, 0]],
+                             "constant", constant_values=np.nan)
+            features = cv2.resize(
+                features, [features.shape[-1], self.config["feat_max_length"]])
+            input_embeds: torch.Tensor = torch.tensor(features)
+        except:
+            print(f"\33[31mpad_length:{pad_length}\33[0m")
+            print(f"\33[31mfeatures.shape:{features.shape}\33[0m")
+            raise
+        attention_mask: torch.Tensor = torch.tensor(
+            [False] * (self.config["feat_max_length"] - pad_length) \
+            + [True] * pad_length
+        )
+        return input_embeds, attention_mask
+
+    def _read_features(self, idx: int) -> NDArray:
+        path: str = self.df.loc[idx, "path"]
+        sequence_id: int = self.df.loc[idx, "sequence_id"]
+        features: NDArray = pd.read_parquet(
+            f"{self.config['path']['dataset']}/{path}",
+            columns=self.config["select_col"],
+        ).loc[[sequence_id]].values
+        features = self._cleaning(features)
+        return features
+
+    def _read_character_map(self) -> dict[str, int]:
+        with open (self.config["path"]["vocab_file"], "r") as f:
+            character_map = json.load(f)
+        return character_map
+
+    def _phrase_to_ids(self, phrase: str) -> torch.Tensor:
+        pad_length: int = self._calc_pad_length(
+            phrase, self.config["max_phrase_length"])
+        ids: list[int] = [self.character_map.get(
+                s, self.config["blank_token_id"]) for s in phrase] \
+            + [self.config["blank_token_id"]] * pad_length
+        ids = ids[:self.config["max_phrase_length"]]
+        return torch.tensor(ids, dtype=int)
+
+    @staticmethod
+    def _calc_pad_length(x: Any, length: int) -> int:
+        return np.clip(length - len(x), 0, length)
+
+    @staticmethod
+    def _cleaning(feature: NDArray, fill_val: float = 0.0) -> NDArray:
+        return np.nan_to_num(feature, fill_val)
+
+    def _read_labels(self, phrases: pd.Series) -> list[torch.Tensor]:
+        labels: list[torch.Tensor] = [
+            self._phrase_to_ids(phrase)
+            for phrase in phrases
+        ]
+        return labels
 
 ################################################################################
 # DataModule

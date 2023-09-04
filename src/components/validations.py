@@ -127,6 +127,7 @@ class LevenshteinDistance:
         # const
         self.config: dict[str, Any] = config
         self.charmap: dict[int, str] = self._read_charmap()
+        self.eos_token_id: int = config["eos_token_id"]
 
     @staticmethod
     def _read_json(filepath: str) -> dict[Any, Any]:
@@ -147,11 +148,15 @@ class LevenshteinDistance:
     def _convert_ids_to_chars(self, ids: NDArray) -> NDArray:
         return "".join([self.charmap.get(i, "") for i in ids if i in self.charmap.keys()])
 
+    def _trim_ids(self, ids: NDArray) -> NDArray:
+        # trim upto eos_token_id
+        return ids[np.cumsum(ids==self.eos_token_id)==0]
+
     def calc(self, probs: NDArray, labels: NDArray) -> list[float]:
         probs_text: list[str] = [
-            self._convert_ids_to_chars(ids) for ids in probs]
+            self._convert_ids_to_chars(self._trim_ids(ids)) for ids in probs]
         labels_text: list[str] = [
-            self._convert_ids_to_chars(ids) for ids in labels]
+            self._convert_ids_to_chars(self._trim_ids(ids)) for ids in labels]
 
         distances: NDArray = np.array([
             Levenshtein.distance(prob_text, label_text)
